@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Micka=C3=ABl=20Sala=C3=BCn?= <clipos@ssi.gouv.fr>
+Date: Mon, 7 May 2012 13:57:17 +0200
+Subject: [PATCH 10/10] Add an option libstrongswan.x509.allow_missing_policy
+
+Add an option "libstrongswan.x509.allow_missing_policy" to not be obliged to
+strictly follow the RFC about x509 sub-policies.  This may be useful for
+certificate authorities not following this rule.
+---
+ .../plugins/constraints/constraints_validator.c    |  8 +++++++
+ src/libstrongswan/plugins/x509/x509_cert.c         | 25 ++++++++++++++++++++++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/src/libstrongswan/plugins/constraints/constraints_validator.c b/src/libstrongswan/plugins/constraints/constraints_validator.c
+index a0f4a7465518..8654f26930ec 100644
+--- a/src/libstrongswan/plugins/constraints/constraints_validator.c
++++ b/src/libstrongswan/plugins/constraints/constraints_validator.c
+@@ -15,6 +15,8 @@
+ 
+ #include "constraints_validator.h"
+ 
++#ifndef X509_CERT_C_
++
+ #include <utils/debug.h>
+ #include <asn1/asn1.h>
+ #include <collections/linked_list.h>
+@@ -306,6 +308,8 @@ static bool check_name_constraints(certificate_t *subject, x509_t *issuer)
+ 	return TRUE;
+ }
+ 
++#endif /* X509_CERT_C_ */
++
+ /**
+  * Special OID for anyPolicy
+  */
+@@ -346,6 +350,8 @@ static bool has_policy(x509_t *issuer, chunk_t oid)
+ 	return FALSE;
+ }
+ 
++#ifndef X509_CERT_C_
++
+ /**
+  * Check certificatePolicies.
+  */
+@@ -707,3 +713,5 @@ constraints_validator_t *constraints_validator_create()
+ 
+ 	return &this->public;
+ }
++
++#endif /* X509_CERT_C_ */
+diff --git a/src/libstrongswan/plugins/x509/x509_cert.c b/src/libstrongswan/plugins/x509/x509_cert.c
+index 96280a033b9a..9d90ac88e7d5 100644
+--- a/src/libstrongswan/plugins/x509/x509_cert.c
++++ b/src/libstrongswan/plugins/x509/x509_cert.c
+@@ -39,6 +39,13 @@
+ #include <utils/identification.h>
+ #include <selectors/traffic_selector.h>
+ 
++/*
++ * Lazy import for libstrongswan.x509.allow_missing_policy == TRUE
++ */
++#define X509_CERT_C_
++#include "../constraints/constraints_validator.c"
++
++
+ /**
+  * Different kinds of generalNames
+  */
+@@ -1501,6 +1508,23 @@ end:
+ 	return success;
+ }
+ 
++static void patch_certificate(private_x509_cert_t *this)
++{
++	if (this->flags & X509_CA &&
++			this->cert_policies->get_count(this->cert_policies) > 0 &&
++			lib->settings->get_bool(lib->settings, "libstrongswan.x509.allow_missing_policy", FALSE) &&
++			!has_policy(&this->public.interface, any_policy))
++	{
++		x509_cert_policy_t *policy = NULL;
++		certificate_t *cert = &this->public.interface.interface;
++		DBG1(DBG_CFG, "adding a fake anyPolicy in certificate '%Y'", cert->get_subject(cert));
++		INIT(policy,
++			.oid = chunk_clone(any_policy),
++		);
++		this->cert_policies->insert_last(this->cert_policies, policy);
++	}
++}
++
+ METHOD(certificate_t, get_type, certificate_type_t,
+ 	private_x509_cert_t *this)
+ {
+@@ -2396,6 +2420,7 @@ x509_cert_t *x509_cert_load(certificate_type_t type, va_list args)
+ 		cert->parsed = TRUE;
+ 		if (parse_certificate(cert))
+ 		{
++			patch_certificate(cert);
+ 			cert->flags |= flags;
+ 			return &cert->public;
+ 		}
+-- 
+2.5.4
+

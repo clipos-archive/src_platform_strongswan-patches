@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vincent Strubel <clipos@ssi.gouv.fr>
+Date: Tue, 13 Jan 2009 16:30:15 +0100
+Subject: [PATCH 01/10] Move the default config path
+
+Move the default config path to '/var/run/ipsec.conf', so that the config can
+be generated on the fly from a skeleton.
+---
+ src/starter/files.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/starter/files.h b/src/starter/files.h
+index 76cdaa986379..d923562cedfd 100644
+--- a/src/starter/files.h
++++ b/src/starter/files.h
+@@ -19,7 +19,7 @@
+ #define PROC_KLIPS              "/proc/net/pf_key"
+ #define PROC_MODULES    "/proc/modules"
+ 
+-#define CONFIG_FILE     IPSEC_CONFDIR "/ipsec.conf"
++#define CONFIG_FILE     IPSEC_PIDDIR "/ipsec.conf"
+ #define SECRETS_FILE    IPSEC_CONFDIR "/ipsec.secrets"
+ 
+ #define CHARON_CTL_FILE IPSEC_PIDDIR "/charon.ctl"
+-- 
+2.5.4
+

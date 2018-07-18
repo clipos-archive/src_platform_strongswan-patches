@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vincent Strubel <clipos@ssi.gouv.fr>
+Date: Mon, 2 Jan 2012 16:08:59 +0100
+Subject: [PATCH 06/10] Fixes libhydra segfault
+
+Fix one more segfault when charon exits - which was preventing it from
+restarting due to grsec's brute-force protection (charon being a 'suid-like'
+executable -> 15 min lockout after each PaX-triggered segfault). The crash is
+caused by charon dereferencing a function pointer from within a NULL structure
+pointer - the patch simply fixes this, not the root cause, but that seems to be
+enough.
+---
+ src/libhydra/kernel/kernel_interface.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/libhydra/kernel/kernel_interface.c b/src/libhydra/kernel/kernel_interface.c
+index 3fa28e0544d5..9bde5cb7beb2 100644
+--- a/src/libhydra/kernel/kernel_interface.c
++++ b/src/libhydra/kernel/kernel_interface.c
+@@ -513,8 +513,10 @@ METHOD(kernel_interface_t, remove_ipsec_interface, void,
+ {
+ 	if (constructor == this->ipsec_constructor && this->ipsec)
+ 	{
+-		this->ipsec->destroy(this->ipsec);
+-		this->ipsec = NULL;
++		if (this->ipsec) {
++			this->ipsec->destroy(this->ipsec);
++			this->ipsec = NULL;
++		}
+ 	}
+ }
+ 
+-- 
+2.5.4
+

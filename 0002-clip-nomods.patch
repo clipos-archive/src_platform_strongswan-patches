@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vincent Strubel <clipos@ssi.gouv.fr>
+Date: Thu, 15 Jan 2009 16:37:05 +0100
+Subject: [PATCH 02/10] Disable module loading in starter on modular kernels
+
+---
+ src/starter/klips.c  | 4 ++++
+ src/starter/netkey.c | 4 ++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/src/starter/klips.c b/src/starter/klips.c
+index 22165465fc18..69a221f3fbce 100644
+--- a/src/starter/klips.c
++++ b/src/starter/klips.c
+@@ -27,11 +27,13 @@ bool starter_klips_init(void)
+ 
+ 	if (stat(PROC_KLIPS, &stb) != 0)
+ 	{
++#if 0
+ 		/* ipsec module makes the pf_key proc interface visible */
+ 		if (stat(PROC_MODULES, &stb) == 0)
+ 		{
+ 			ignore_result(system("modprobe -qv ipsec"));
+ 		}
++#endif
+ 
+ 		/* now test again */
+ 		if (stat(PROC_KLIPS, &stb) != 0)
+@@ -41,10 +43,12 @@ bool starter_klips_init(void)
+ 		}
+ 	}
+ 
++#if 0
+ 	/* load crypto algorithm modules */
+ 	ignore_result(system("modprobe -qv ipsec_aes"));
+ 	ignore_result(system("modprobe -qv ipsec_blowfish"));
+ 	ignore_result(system("modprobe -qv ipsec_sha2"));
++#endif
+ 
+ 	DBG2(DBG_APP, "found KLIPS IPsec stack");
+ 	return TRUE;
+diff --git a/src/starter/netkey.c b/src/starter/netkey.c
+index 2b500bab46e9..33934369c201 100644
+--- a/src/starter/netkey.c
++++ b/src/starter/netkey.c
+@@ -28,11 +28,13 @@ bool starter_netkey_init(void)
+ 
+ 	if (stat(PROC_NETKEY, &stb) != 0)
+ 	{
++#if 0
+ 		/* af_key module makes the netkey proc interface visible */
+ 		if (stat(PROC_MODULES, &stb) == 0)
+ 		{
+ 			ignore_result(system("modprobe -qv af_key"));
+ 		}
++#endif
+ 
+ 		/* now test again */
+ 		if (stat(PROC_NETKEY, &stb) != 0)
+@@ -42,6 +44,7 @@ bool starter_netkey_init(void)
+ 		}
+ 	}
+ 
++#if 0
+ 	/* make sure that all required IPsec modules are loaded */
+ 	if (stat(PROC_MODULES, &stb) == 0)
+ 	{
+@@ -51,6 +54,7 @@ bool starter_netkey_init(void)
+ 		ignore_result(system("modprobe -qv xfrm4_tunnel"));
+ 		ignore_result(system("modprobe -qv xfrm_user"));
+ 	}
++#endif
+ 
+ 	DBG2(DBG_APP, "found netkey IPsec stack");
+ 	return TRUE;
+-- 
+2.5.4
+

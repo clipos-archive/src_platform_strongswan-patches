@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Micka=C3=ABl=20Sala=C3=BCn?= <clipos@ssi.gouv.fr>
+Date: Tue, 13 Mar 2012 10:38:19 +0100
+Subject: [PATCH 08/10] Set SAD updates log at KNL-1
+
+---
+ src/libhydra/plugins/kernel_netlink/kernel_netlink_ipsec.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/libhydra/plugins/kernel_netlink/kernel_netlink_ipsec.c b/src/libhydra/plugins/kernel_netlink/kernel_netlink_ipsec.c
+index cfe58bc6b24d..bb648ec4e1a0 100644
+--- a/src/libhydra/plugins/kernel_netlink/kernel_netlink_ipsec.c
++++ b/src/libhydra/plugins/kernel_netlink/kernel_netlink_ipsec.c
+@@ -1884,7 +1884,7 @@ METHOD(kernel_ipsec_t, update_sa, status_t,
+ 		goto failed;
+ 	}
+ 
+-	DBG2(DBG_KNL, "updating SAD entry with SPI %.8x from %#H..%#H to %#H..%#H",
++	DBG1(DBG_KNL, "updating SAD entry with SPI %.8x from %#H..%#H to %#H..%#H",
+ 				   ntohl(spi), src, dst, new_src, new_dst);
+ 	/* copy over the SA from out to request */
+ 	hdr = &request.hdr;
+-- 
+2.5.4
+

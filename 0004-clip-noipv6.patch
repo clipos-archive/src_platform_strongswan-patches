@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vincent Strubel <clipos@ssi.gouv.fr>
+Date: Wed, 29 Sep 2010 18:51:02 +0200
+Subject: [PATCH 04/10] Disable IPv6
+
+---
+ src/libhydra/plugins/kernel_netlink/kernel_netlink_net.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/libhydra/plugins/kernel_netlink/kernel_netlink_net.c b/src/libhydra/plugins/kernel_netlink/kernel_netlink_net.c
+index b8cd3977d141..02806aca7e0d 100644
+--- a/src/libhydra/plugins/kernel_netlink/kernel_netlink_net.c
++++ b/src/libhydra/plugins/kernel_netlink/kernel_netlink_net.c
+@@ -2611,11 +2611,13 @@ kernel_netlink_net_t *kernel_netlink_net_create()
+ 		{
+ 			DBG1(DBG_KNL, "unable to create IPv4 routing table rule");
+ 		}
++		/*
+ 		if (manage_rule(this, RTM_NEWRULE, AF_INET6, this->routing_table,
+ 						this->routing_table_prio) != SUCCESS)
+ 		{
+ 			DBG1(DBG_KNL, "unable to create IPv6 routing table rule");
+ 		}
++		*/
+ 	}
+ 
+ 	return &this->public;
+-- 
+2.5.4
+

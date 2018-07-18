@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vincent Strubel <clipos@ssi.gouv.fr>
+Date: Fri, 3 Apr 2009 18:43:13 +0200
+Subject: [PATCH 03/10] Fix annoying 'scepclient' warning on start up
+
+---
+ src/starter/starter.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/starter/starter.c b/src/starter/starter.c
+index 74b5b5286162..e2a6f1213f80 100644
+--- a/src/starter/starter.c
++++ b/src/starter/starter.c
+@@ -299,7 +299,9 @@ static void generate_selfcert()
+ #endif
+ 		ignore_result(setegid(gid));
+ 		ignore_result(seteuid(uid));
++#if 0
+ 		ignore_result(system(IPSEC_SCRIPT " scepclient --out pkcs1 --out cert-self --quiet"));
++#endif
+ 		ignore_result(seteuid(0));
+ 		ignore_result(setegid(0));
+ 
+-- 
+2.5.4
+

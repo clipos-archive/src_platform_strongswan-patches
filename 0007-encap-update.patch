@@ -1,0 +1,406 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Micka=C3=ABl=20Sala=C3=BCn?= <clipos@ssi.gouv.fr>
+Date: Mon, 12 Mar 2012 20:35:19 +0100
+Subject: [PATCH 07/10] Fixes UDP/ESP encapsulation update when the gateway is
+ behind NAT
+
+strongSwan thinks that when a gateway is NATed it is not needed to update its
+SAs because it is not possible to receive a connection from a client through
+the NAT.  Indeed, the firewall/NAT doesn't track connection/mapping if its
+clients change addresses.  However, when this firewall/NAT knows exactly its
+clients (e.g. forwarding port), there is no issue to update its SADs.
+
+The new option "nat_redirection" (disabled by default) means to consider that
+the NATed connections are defined by "static" rules, which then enables to
+apply MobIKE even if the two end points are NATed.
+
+Another fix enables to update the SADs even if the clients are not (detected
+as) NATed whereas they can still change their IP/port.
+---
+ man/ipsec.conf.5.in                                    |  8 ++++++++
+ src/charon-cmd/cmd/cmd_connection.c                    |  2 +-
+ src/conftest/config.c                                  |  2 +-
+ src/libcharon/config/ike_cfg.c                         | 16 +++++++++++++++-
+ src/libcharon/config/ike_cfg.h                         | 10 +++++++++-
+ src/libcharon/plugins/ha/ha_tunnel.c                   |  2 +-
+ src/libcharon/plugins/load_tester/load_tester_config.c |  4 ++--
+ src/libcharon/plugins/maemo/maemo_service.c            |  3 ++-
+ src/libcharon/plugins/medsrv/medsrv_config.c           |  2 +-
+ src/libcharon/plugins/sql/sql_config.c                 |  2 +-
+ src/libcharon/plugins/stroke/stroke_config.c           |  3 ++-
+ src/libcharon/plugins/uci/uci_config.c                 |  4 ++--
+ src/libcharon/processing/jobs/update_sa_job.c          |  5 ++++-
+ src/starter/args.c                                     |  1 +
+ src/starter/confread.c                                 |  3 +++
+ src/starter/confread.h                                 |  2 ++
+ src/starter/keywords.h                                 |  3 ++-
+ src/starter/keywords.txt                               |  1 +
+ src/starter/starterstroke.c                            |  1 +
+ src/stroke/stroke_msg.h                                |  1 +
+ 20 files changed, 60 insertions(+), 15 deletions(-)
+
+diff --git a/man/ipsec.conf.5.in b/man/ipsec.conf.5.in
+index 1c5ac00150bb..cbd866052125 100644
+--- a/man/ipsec.conf.5.in
++++ b/man/ipsec.conf.5.in
+@@ -1096,6 +1096,14 @@ special value
+ .BR %mtu
+ fills up ESP packets with padding to have the size of the MTU.
+ .TP
++.BR nat_redirection " = yes | " no
++activates SA updates (MOBIKE) for gateways behind static NAT: port forwarding or mapping.
++Accepted values are
++.BR yes
++and
++.B no
++(the default).
++.TP
+ .BR type " = " tunnel " | transport | transport_proxy | passthrough | drop"
+ the type of the connection; currently the accepted values
+ are
+diff --git a/src/charon-cmd/cmd/cmd_connection.c b/src/charon-cmd/cmd/cmd_connection.c
+index 2c0b7b9d5aac..f92a54854127 100644
+--- a/src/charon-cmd/cmd/cmd_connection.c
++++ b/src/charon-cmd/cmd/cmd_connection.c
+@@ -175,7 +175,7 @@ static peer_cfg_t* create_peer_cfg(private_cmd_connection_t *this)
+ 		remote_port = IKEV2_NATT_PORT;
+ 	}
+ 	ike_cfg = ike_cfg_create(version, TRUE, FALSE, "0.0.0.0", local_port,
+-					this->host, remote_port, FRAGMENTATION_NO, 0);
++					this->host, remote_port, FRAGMENTATION_NO, 0, FALSE);
+ 	if (this->ike_proposals->get_count(this->ike_proposals))
+ 	{
+ 		while (this->ike_proposals->remove_first(this->ike_proposals,
+diff --git a/src/conftest/config.c b/src/conftest/config.c
+index c83db7ecd9cb..a6b44ac49765 100644
+--- a/src/conftest/config.c
++++ b/src/conftest/config.c
+@@ -107,7 +107,7 @@ static ike_cfg_t *load_ike_config(private_config_t *this,
+ 		settings->get_int(settings, "configs.%s.lport", 500, config),
+ 		settings->get_str(settings, "configs.%s.rhost", "%any", config),
+ 		settings->get_int(settings, "configs.%s.rport", 500, config),
+-		FRAGMENTATION_NO, 0);
++		FRAGMENTATION_NO, 0, FALSE);
+ 	token = settings->get_str(settings, "configs.%s.proposal", NULL, config);
+ 	if (token)
+ 	{
+diff --git a/src/libcharon/config/ike_cfg.c b/src/libcharon/config/ike_cfg.c
+index 9464ceb5dc65..08fcadd6d0a2 100644
+--- a/src/libcharon/config/ike_cfg.c
++++ b/src/libcharon/config/ike_cfg.c
+@@ -113,6 +113,11 @@ struct private_ike_cfg_t {
+ 	 * List of proposals to use
+ 	 */
+ 	linked_list_t *proposals;
++
++	/**
++	 * force SA update even if the current host is NATed
++	 */
++	bool nat_redirection;
+ };
+ 
+ METHOD(ike_cfg_t, get_version, ike_version_t,
+@@ -510,13 +515,20 @@ static void parse_addresses(char *str, linked_list_t *hosts,
+ 	enumerator->destroy(enumerator);
+ }
+ 
++METHOD(ike_cfg_t, nat_redirection, bool,
++	private_ike_cfg_t *this)
++{
++	return this->nat_redirection;
++}
++
+ /**
+  * Described in header.
+  */
+ ike_cfg_t *ike_cfg_create(ike_version_t version, bool certreq, bool force_encap,
+ 						  char *me, u_int16_t my_port,
+ 						  char *other, u_int16_t other_port,
+-						  fragmentation_t fragmentation, u_int8_t dscp)
++						  fragmentation_t fragmentation, u_int8_t dscp,
++						  bool nat_rdr)
+ {
+ 	private_ike_cfg_t *this;
+ 
+@@ -542,6 +554,7 @@ ike_cfg_t *ike_cfg_create(ike_version_t version, bool certreq, bool force_encap,
+ 			.equals = _equals,
+ 			.get_ref = _get_ref,
+ 			.destroy = _destroy,
++			.nat_redirection = _nat_redirection,
+ 		},
+ 		.refcount = 1,
+ 		.version = version,
+@@ -558,6 +571,7 @@ ike_cfg_t *ike_cfg_create(ike_version_t version, bool certreq, bool force_encap,
+ 		.other_port = other_port,
+ 		.dscp = dscp,
+ 		.proposals = linked_list_create(),
++		.nat_redirection = nat_rdr,
+ 	);
+ 
+ 	parse_addresses(me, this->my_hosts, this->my_ranges);
+diff --git a/src/libcharon/config/ike_cfg.h b/src/libcharon/config/ike_cfg.h
+index adfcabf70076..cbe3086fc132 100644
+--- a/src/libcharon/config/ike_cfg.h
++++ b/src/libcharon/config/ike_cfg.h
+@@ -191,6 +191,13 @@ struct ike_cfg_t {
+ 	bool (*force_encap) (ike_cfg_t *this);
+ 
+ 	/**
++	 * Enforce SA update whenhever current host is NATed or not?
++	 *
++	 * @return			TRUE to enforce SA update
++	 */
++	bool (*nat_redirection) (ike_cfg_t *this);
++
++	/**
+ 	 * Use proprietary IKEv1 fragmentation
+ 	 *
+ 	 * @return				TRUE to use fragmentation
+@@ -247,11 +254,12 @@ struct ike_cfg_t {
+  * @param other_port		IKE port to use as dest, 500 uses IKEv2 port floating
+  * @param fragmentation		use IKEv1 fragmentation
+  * @param dscp				DSCP value to send IKE packets with
++ * @param nat_rdr		enforce SA update wether current host is NATed or not
+  * @return 					ike_cfg_t object.
+  */
+ ike_cfg_t *ike_cfg_create(ike_version_t version, bool certreq, bool force_encap,
+ 						  char *me, u_int16_t my_port,
+ 						  char *other, u_int16_t other_port,
+-						  fragmentation_t fragmentation, u_int8_t dscp);
++						  fragmentation_t fragmentation, u_int8_t dscp, bool nat_rdr);
+ 
+ #endif /** IKE_CFG_H_ @}*/
+diff --git a/src/libcharon/plugins/ha/ha_tunnel.c b/src/libcharon/plugins/ha/ha_tunnel.c
+index dd2399366e2a..049ecfacb142 100644
+--- a/src/libcharon/plugins/ha/ha_tunnel.c
++++ b/src/libcharon/plugins/ha/ha_tunnel.c
+@@ -205,7 +205,7 @@ static void setup_tunnel(private_ha_tunnel_t *this,
+ 	/* create config and backend */
+ 	ike_cfg = ike_cfg_create(IKEV2, FALSE, FALSE, local,
+ 							 charon->socket->get_port(charon->socket, FALSE),
+-							 remote, IKEV2_UDP_PORT, FRAGMENTATION_NO, 0);
++							 remote, IKEV2_UDP_PORT, FRAGMENTATION_NO, 0, FALSE);
+ 	ike_cfg->add_proposal(ike_cfg, proposal_create_default(PROTO_IKE));
+ 	ike_cfg->add_proposal(ike_cfg, proposal_create_default_aead(PROTO_IKE));
+ 	peer_cfg = peer_cfg_create("ha", ike_cfg, CERT_NEVER_SEND,
+diff --git a/src/libcharon/plugins/load_tester/load_tester_config.c b/src/libcharon/plugins/load_tester/load_tester_config.c
+index bc7c0ffbc259..e27ad2e9a35a 100644
+--- a/src/libcharon/plugins/load_tester/load_tester_config.c
++++ b/src/libcharon/plugins/load_tester/load_tester_config.c
+@@ -706,14 +706,14 @@ static peer_cfg_t* generate_config(private_load_tester_config_t *this, uint num)
+ 		ike_cfg = ike_cfg_create(this->version, TRUE, FALSE,
+ 								 local, this->port + num - 1,
+ 								 remote, IKEV2_NATT_PORT,
+-								 FRAGMENTATION_NO, 0);
++								 FRAGMENTATION_NO, 0, FALSE);
+ 	}
+ 	else
+ 	{
+ 		ike_cfg = ike_cfg_create(this->version, TRUE, FALSE, local,
+ 								 charon->socket->get_port(charon->socket, FALSE),
+ 								 remote, IKEV2_UDP_PORT,
+-								 FRAGMENTATION_NO, 0);
++								 FRAGMENTATION_NO, 0, FALSE);
+ 	}
+ 	ike_cfg->add_proposal(ike_cfg, this->proposal->clone(this->proposal));
+ 	peer_cfg = peer_cfg_create("load-test", ike_cfg,
+diff --git a/src/libcharon/plugins/maemo/maemo_service.c b/src/libcharon/plugins/maemo/maemo_service.c
+index 2e96f8fb4b2f..47f4a8d72963 100644
+--- a/src/libcharon/plugins/maemo/maemo_service.c
++++ b/src/libcharon/plugins/maemo/maemo_service.c
+@@ -325,7 +325,8 @@ static gboolean initiate_connection(private_maemo_service_t *this,
+ 
+ 	ike_cfg = ike_cfg_create(IKEV2, TRUE, FALSE, "0.0.0.0",
+ 							 charon->socket->get_port(charon->socket, FALSE),
+-							 hostname, IKEV2_UDP_PORT, FRAGMENTATION_NO, 0);
++							 hostname, IKEV2_UDP_PORT, FRAGMENTATION_NO,
++							 0, FALSE);
+ 	ike_cfg->add_proposal(ike_cfg, proposal_create_default(PROTO_IKE));
+ 	ike_cfg->add_proposal(ike_cfg, proposal_create_default_aead(PROTO_IKE));
+ 
+diff --git a/src/libcharon/plugins/medsrv/medsrv_config.c b/src/libcharon/plugins/medsrv/medsrv_config.c
+index 02d805e06cbf..df33b90ef81b 100644
+--- a/src/libcharon/plugins/medsrv/medsrv_config.c
++++ b/src/libcharon/plugins/medsrv/medsrv_config.c
+@@ -142,7 +142,7 @@ medsrv_config_t *medsrv_config_create(database_t *db)
+ 		.ike = ike_cfg_create(IKEV2, FALSE, FALSE, "0.0.0.0",
+ 							  charon->socket->get_port(charon->socket, FALSE),
+ 							  "0.0.0.0", IKEV2_UDP_PORT,
+-							  FRAGMENTATION_NO, 0),
++							  FRAGMENTATION_NO, 0, FALSE),
+ 	);
+ 	this->ike->add_proposal(this->ike, proposal_create_default(PROTO_IKE));
+ 	this->ike->add_proposal(this->ike, proposal_create_default_aead(PROTO_IKE));
+diff --git a/src/libcharon/plugins/sql/sql_config.c b/src/libcharon/plugins/sql/sql_config.c
+index c47c7c0f86dc..175fea0e27b9 100644
+--- a/src/libcharon/plugins/sql/sql_config.c
++++ b/src/libcharon/plugins/sql/sql_config.c
+@@ -262,7 +262,7 @@ static ike_cfg_t *build_ike_cfg(private_sql_config_t *this, enumerator_t *e,
+ 
+ 		ike_cfg = ike_cfg_create(IKEV2, certreq, force_encap, local,
+ 								 charon->socket->get_port(charon->socket, FALSE),
+-								 remote, IKEV2_UDP_PORT, FRAGMENTATION_NO, 0);
++								 remote, IKEV2_UDP_PORT, FRAGMENTATION_NO, 0, FALSE);
+ 		add_ike_proposals(this, ike_cfg, id);
+ 		return ike_cfg;
+ 	}
+diff --git a/src/libcharon/plugins/stroke/stroke_config.c b/src/libcharon/plugins/stroke/stroke_config.c
+index 3e40a7888956..1918f88b99a1 100644
+--- a/src/libcharon/plugins/stroke/stroke_config.c
++++ b/src/libcharon/plugins/stroke/stroke_config.c
+@@ -265,7 +265,8 @@ static ike_cfg_t *build_ike_cfg(private_stroke_config_t *this, stroke_msg_t *msg
+ 								other : msg->add_conn.other.address,
+ 							 msg->add_conn.other.ikeport,
+ 							 msg->add_conn.fragmentation,
+-							 msg->add_conn.ikedscp);
++							 msg->add_conn.ikedscp,
++							 msg->add_conn.nat_redirection);
+ 
+ 	add_proposals(this, msg->add_conn.algorithms.ike, ike_cfg, NULL, PROTO_IKE);
+ 	return ike_cfg;
+diff --git a/src/libcharon/plugins/uci/uci_config.c b/src/libcharon/plugins/uci/uci_config.c
+index 2a8e403802f4..da9a86ffe324 100644
+--- a/src/libcharon/plugins/uci/uci_config.c
++++ b/src/libcharon/plugins/uci/uci_config.c
+@@ -155,7 +155,7 @@ METHOD(enumerator_t, peer_enumerator_enumerate, bool,
+ 		ike_cfg = ike_cfg_create(IKEV2, FALSE, FALSE, local_addr,
+ 								 charon->socket->get_port(charon->socket, FALSE),
+ 								 remote_addr, IKEV2_UDP_PORT,
+-								 FRAGMENTATION_NO, 0);
++								 FRAGMENTATION_NO, 0, FALSE);
+ 		ike_cfg->add_proposal(ike_cfg, create_proposal(ike_proposal, PROTO_IKE));
+ 		this->peer_cfg = peer_cfg_create(
+ 					name, ike_cfg, CERT_SEND_IF_ASKED, UNIQUE_NO,
+@@ -253,7 +253,7 @@ METHOD(enumerator_t, ike_enumerator_enumerate, bool,
+ 		this->ike_cfg = ike_cfg_create(IKEV2, FALSE, FALSE, local_addr,
+ 								charon->socket->get_port(charon->socket, FALSE),
+ 								remote_addr, IKEV2_UDP_PORT,
+-								FRAGMENTATION_NO, 0);
++								FRAGMENTATION_NO, 0, FALSE);
+ 		this->ike_cfg->add_proposal(this->ike_cfg,
+ 									create_proposal(ike_proposal, PROTO_IKE));
+ 
+diff --git a/src/libcharon/processing/jobs/update_sa_job.c b/src/libcharon/processing/jobs/update_sa_job.c
+index e6d7da2c686d..c8763ccc3340 100644
+--- a/src/libcharon/processing/jobs/update_sa_job.c
++++ b/src/libcharon/processing/jobs/update_sa_job.c
+@@ -54,6 +54,7 @@ METHOD(job_t, execute, job_requeue_t,
+ 	private_update_sa_job_t *this)
+ {
+ 	ike_sa_t *ike_sa;
++	ike_cfg_t *config;
+ 
+ 	ike_sa = charon->ike_sa_manager->checkout_by_id(charon->ike_sa_manager,
+ 													this->reqid, TRUE);
+@@ -63,7 +64,9 @@ METHOD(job_t, execute, job_requeue_t,
+ 	}
+ 	else
+ 	{
+-		ike_sa->update_hosts(ike_sa, NULL, this->new, FALSE);
++		config = ike_sa->get_ike_cfg(ike_sa);
++		DBG1(DBG_JOB, "using nat redirection fix");
++		ike_sa->update_hosts(ike_sa, NULL, this->new, config->nat_redirection(config));
+ 		charon->ike_sa_manager->checkin(charon->ike_sa_manager, ike_sa);
+ 	}
+ 	return JOB_REQUEUE_NONE;
+diff --git a/src/starter/args.c b/src/starter/args.c
+index 0874cc7e5aff..6778b4bb7df7 100644
+--- a/src/starter/args.c
++++ b/src/starter/args.c
+@@ -179,6 +179,7 @@ static const token_info_t token_info[] =
+ 	{ ARG_MISC, 0, NULL  /* KW_TFC */                                              },
+ 	{ ARG_MISC, 0, NULL  /* KW_PFS_DEPRECATED */                                   },
+ 	{ ARG_MISC, 0, NULL  /* KW_CONN_DEPRECATED */                                  },
++	{ ARG_MISC, 0, NULL  /* KW_NAT_REDIRECTION */                                  },
+ 
+ 	/* ca section keywords */
+ 	{ ARG_STR,  offsetof(starter_ca_t, name), NULL                                 },
+diff --git a/src/starter/confread.c b/src/starter/confread.c
+index de9099a1b337..a68e69cedbd4 100644
+--- a/src/starter/confread.c
++++ b/src/starter/confread.c
+@@ -507,6 +507,9 @@ static void handle_keyword(kw_token_t token, starter_conn_t *conn, char *key,
+ 				}
+ 			}
+ 			break;
++		case KW_NAT_REDIRECTION:
++			KW_SA_OPTION_FLAG("yes", "no", SA_OPTION_NAT_REDIRECTION)
++			break;
+ 		case KW_KEYINGTRIES:
+ 			if (streq(value, "%forever"))
+ 			{
+diff --git a/src/starter/confread.h b/src/starter/confread.h
+index 0eea988490fb..a10f003891ff 100644
+--- a/src/starter/confread.h
++++ b/src/starter/confread.h
+@@ -80,6 +80,7 @@ typedef enum {
+ 		SA_OPTION_XAUTH_SERVER  = 1 << 5, /* are we an XAUTH server? */
+ 		SA_OPTION_MOBIKE		= 1 << 6, /* enable MOBIKE for IKEv2  */
+ 		SA_OPTION_FORCE_ENCAP   = 1 << 7, /* force UDP encapsulation */
++		SA_OPTION_NAT_REDIRECTION = 1 << 8, /* enable NAT redirection */
+ } sa_option_t;
+ 
+ typedef struct starter_end starter_end_t;
+@@ -100,6 +101,7 @@ struct starter_end {
+ 		char            *host;
+ 		u_int           ikeport;
+ 		char            *subnet;
++		bool		nat_redirection;
+ 		bool            modecfg;
+ 		certpolicy_t    sendcert;
+ 		bool            firewall;
+diff --git a/src/starter/keywords.h b/src/starter/keywords.h
+index 94af493f8fee..2c4c602c2ddd 100644
+--- a/src/starter/keywords.h
++++ b/src/starter/keywords.h
+@@ -79,9 +79,10 @@ enum kw_token_t {
+ 	KW_TFC,
+ 	KW_PFS_DEPRECATED,
+ 	KW_CONN_DEPRECATED,
++	KW_NAT_REDIRECTION,
+ 
+ #define KW_CONN_FIRST   KW_CONN_SETUP
+-#define KW_CONN_LAST    KW_CONN_DEPRECATED
++#define KW_CONN_LAST    KW_NAT_REDIRECTION
+ 
+ 	/* ca section keywords */
+ 	KW_CA_NAME,
+diff --git a/src/starter/keywords.txt b/src/starter/keywords.txt
+index ee0bd31e1e54..3fca0ae78762 100644
+--- a/src/starter/keywords.txt
++++ b/src/starter/keywords.txt
+@@ -74,6 +74,7 @@ mark,              KW_MARK
+ mark_in,           KW_MARK_IN
+ mark_out,          KW_MARK_OUT
+ tfc,               KW_TFC
++nat_redirection,   KW_NAT_REDIRECTION
+ cacert,            KW_CACERT
+ crluri,            KW_CRLURI
+ crluri1,           KW_CRLURI
+diff --git a/src/starter/starterstroke.c b/src/starter/starterstroke.c
+index 1e305db8bab5..c15f7f76ed62 100644
+--- a/src/starter/starterstroke.c
++++ b/src/starter/starterstroke.c
+@@ -191,6 +191,7 @@ int starter_stroke_add_conn(starter_config_t *cfg, starter_conn_t *conn)
+ 	msg.add_conn.mark_out.value = conn->mark_out.value;
+ 	msg.add_conn.mark_out.mask = conn->mark_out.mask;
+ 	msg.add_conn.tfc = conn->tfc;
++	msg.add_conn.nat_redirection = conn->options & SA_OPTION_NAT_REDIRECTION;
+ 
+ 	starter_stroke_add_end(&msg, &msg.add_conn.me, &conn->left);
+ 	starter_stroke_add_end(&msg, &msg.add_conn.other, &conn->right);
+diff --git a/src/stroke/stroke_msg.h b/src/stroke/stroke_msg.h
+index 60886cf7fec4..e6b392173be7 100644
+--- a/src/stroke/stroke_msg.h
++++ b/src/stroke/stroke_msg.h
+@@ -269,6 +269,7 @@ struct stroke_msg_t {
+ 			u_int32_t reqid;
+ 			u_int32_t tfc;
+ 			u_int8_t ikedscp;
++			int nat_redirection;
+ 
+ 			crl_policy_t crl_policy;
+ 			int unique;
+-- 
+2.5.4
+
